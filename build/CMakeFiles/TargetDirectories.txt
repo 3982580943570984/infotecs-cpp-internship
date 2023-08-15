@@ -1,4 +1,0 @@
-/home/kali/Desktop/test/build/CMakeFiles/server.dir
-/home/kali/Desktop/test/build/CMakeFiles/client.dir
-/home/kali/Desktop/test/build/CMakeFiles/edit_cache.dir
-/home/kali/Desktop/test/build/CMakeFiles/rebuild_cache.dir
