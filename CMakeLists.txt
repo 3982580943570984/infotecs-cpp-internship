@@ -3,8 +3,14 @@ project(ClientServerExample)
 
 set(CMAKE_CXX_STANDARD 14)
 
-# Add the server executable
-add_executable(server ./src/server.cpp)
+# Server executable
+add_executable(server ./server/main.cpp ./server/server.cpp ./other/utils.cpp)
 
-# Add the client executable
-add_executable(client ./src/client.cpp)
+# Client executable
+add_executable(client ./client/main.cpp ./client/client.cpp ./other/utils.cpp)
+
+# Server tests executable
+add_executable(server_tests ./tests/server_tests.cpp)
+
+# Client tests executable
+add_executable(client_tests ./tests/client_tests.cpp)
