@@ -1,123 +1,128 @@
-#include <algorithm>
-#include <arpa/inet.h> /* inet_ntop */
-#include <condition_variable>
-#include <iostream>
-#include <mutex>
+#include <algorithm>          /* for std::all_of, std::sort */
+#include <arpa/inet.h>        /* for inet_ntop */
+#include <condition_variable> /* for std::condition_variable */
+#include <iostream>           /* for std::cout */
+#include <mutex>              /* for std::mutex */
 #include <netinet/in.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
 
-#define PORT 8080
+constexpr int PORT = 8080;
+constexpr char IP_ADDRESS[] = "127.0.0.1";
+constexpr size_t MAX_INPUT_LENGTH = 64;
+constexpr char REPLACEMENT[] = "KB";
 
 std::mutex mtx;
 std::condition_variable cv;
 std::string data;
-bool inputReady = false;
+bool input_ready = false;
 
-void thread1() {
+int createTCPIpV4Socket(void);
+
+std::unique_ptr<sockaddr_in> createIPv4Address(const char* ip_address, uint16_t port);
+
+bool isValidInput(const std::string &input) {
+  return input.length() <= MAX_INPUT_LENGTH &&
+         std::all_of(input.begin(), input.end(), ::isdigit);
+}
+
+std::string processInput(std::string input) {
+  std::sort(input.begin(), input.end(), std::greater<char>());
+
+  std::string output;
+
+  for (const auto &c : input) {
+    if ((c - '0') % 2 == 0) {
+      output += REPLACEMENT;
+    } else {
+      output += c;
+    }
+  }
+
+  return output;
+}
+
+void userInputThread() {
   while (true) {
     std::string input;
     std::getline(std::cin, input);
 
-    if (input.length() > 64 ||
-        !std::all_of(input.begin(), input.end(), ::isdigit)) {
+    if (!isValidInput(input)) {
       std::cout << "Error: Invalid input" << std::endl;
       continue;
     }
 
-    std::sort(input.begin(), input.end(), std::greater<char>());
-
-    // std::transform(input.begin(), input.end(), input.begin(), [](char c) {
-    //   if ((c - '0') % 2 == 0) {
-    //     return 'K';
-    //   }
-    //   return c;
-    // });
-
-    // std::replace_if(
-    //     input.begin(), input.end(), [](char c) { return (c - '0') % 2 == 0;
-    //     }, 'K');
-
-    std::string replacement = "KB";
-    std::string output;
-
-    for (const auto& c : input) {
-      if ((c - '0') % 2 == 0) {
-        output += replacement;
-      } else {
-        output += c;
-      }
-    }
-
-    input = std::move(output);
-
     std::unique_lock<std::mutex> lock(mtx);
-    data = input;
-    inputReady = true;
-    lock.unlock();
-
+    data = processInput(std::move(input));
+    input_ready = true;
     cv.notify_one();
   }
 }
 
-void thread2() {
-  struct sockaddr_in address;
-  int sock = 0;
-  struct sockaddr_in serv_addr;
-  char buffer[1024] = {0};
-
-  if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-    std::cout << "Socket creation error" << std::endl;
-    return;
+int calculateDigitsSum(const std::string &str) {
+  int sum = 0;
+  
+  for (const auto& c : str) {
+    if (c >= '0' && c <= '9') {
+      sum += c - '0';
+    }
   }
 
-  memset(&serv_addr, '0', sizeof(serv_addr));
-  serv_addr.sin_family = AF_INET;
-  serv_addr.sin_port = htons(PORT);
+  return sum;
+}
 
-  if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
-    std::cout << "Invalid address/ Address not supported" << std::endl;
-    return;
+void serverCommunicationThread() {
+  // Creating socket
+  int socket_fd = createTCPIpV4Socket();
+  if (socket_fd == -1) {
+    perror("Socket creation failed");
+    exit(EXIT_FAILURE);
   }
 
-  if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-    std::cout << "Connection Failed" << std::endl;
-    return;
+  // Setting socket to reuse address
+  auto serv_addr = createIPv4Address(IP_ADDRESS, 80);
+
+  // Connecting to the server
+  if (connect(socket_fd, (sockaddr *)serv_addr.get(), sizeof(*serv_addr)) == -1) {
+    perror("Connection failed");
+    exit(EXIT_FAILURE);
   }
 
   while (true) {
     std::unique_lock<std::mutex> lock(mtx);
-    cv.wait(lock, []() { return inputReady; });
+    cv.wait(lock, []() { return input_ready; });
 
-    std::string temp = data;
-    data.clear();
-    inputReady = false;
-    lock.unlock();
-
+    std::string temp = std::move(data);
+    input_ready = false;
     std::cout << "Thread 2 has input: " << temp << std::endl;
 
-    int sum = 0;
-    for (char c : temp) {
-      if (c >= '0' && c <= '9') {
-        sum += c - '0';
-      }
-    }
+    int sum = calculateDigitsSum(temp);
+    std::cout << "Sum of all elements: " << sum << std::endl;
 
-    std::cout << "Sum: " << sum << std::endl;
     std::string sum_str = std::to_string(sum);
-
-    send(sock, sum_str.c_str(), sum_str.size(), 0);
+    // check for error
+    send(socket_fd, sum_str.c_str(), sum_str.length(), 0);
   }
 }
 
 int main() {
-  std::thread t1(thread1);
-  std::thread t2(thread2);
+  std::thread t1(userInputThread);
+  std::thread t2(serverCommunicationThread);
 
   t1.join();
   t2.join();
 
   return 0;
+}
+
+int createTCPIpV4Socket(void) { return socket(AF_INET, SOCK_STREAM, 0); }
+
+std::unique_ptr<sockaddr_in> createIPv4Address(const char* ip_address, uint16_t port) {
+  std::unique_ptr<sockaddr_in> address = std::make_unique<sockaddr_in>();
+  address->sin_family = AF_INET;
+  address->sin_port = htons(port);
+  inet_pton(AF_INET, ip_address, &(address->sin_addr));
+  return address;
 }
